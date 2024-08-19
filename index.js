@@ -10,6 +10,7 @@ puppeteer.use(AnonymizeUAPlugin())
 
 async function downloadImagesFromJson(jsonFilePath, outputFolder) {
   const stateFilePath = path.join(outputFolder, "download_state.json")
+  const failedFilePath = path.join(outputFolder, "failed.json")
 
   try {
     // Launch Puppeteer
@@ -28,11 +29,27 @@ async function downloadImagesFromJson(jsonFilePath, outputFolder) {
 
     // Initialize state
     let lastProcessedIndex = 0
+    let failedDownloads = []
 
     // Function to save state to file
     const saveState = () => {
       const state = { lastProcessedIndex }
       fs.writeFileSync(stateFilePath, JSON.stringify(state))
+    }
+
+    // Function to save failed downloads to file
+    const saveFailedDownloads = () => {
+      if (failedDownloads.length > 0) {
+        fs.writeFileSync(
+          failedFilePath,
+          JSON.stringify(failedDownloads, null, 2)
+        )
+      }
+    }
+
+    // Load failed downloads if the file exists
+    if (fs.existsSync(failedFilePath)) {
+      failedDownloads = JSON.parse(fs.readFileSync(failedFilePath))
     }
 
     // Check if a state file exists
@@ -47,7 +64,7 @@ async function downloadImagesFromJson(jsonFilePath, outputFolder) {
 
       // Check if item has ManufacturerProductNumber and PhotoUrl
       if (!item.ManufacturerProductNumber || !item.PhotoUrl) {
-        console.log(`Skipping item: ${i} / ${jsonData.length}`, item)
+        console.log(`Skipping item: ${i + 1} / ${jsonData.length}`, item)
         continue
       }
 
@@ -67,8 +84,12 @@ async function downloadImagesFromJson(jsonFilePath, outputFolder) {
 
         // Extract image URL from the page
         const imageURL = await page.evaluate(
-          () => document.querySelector("img").src
+          () => document.querySelector("img")?.src
         )
+
+        if (!imageURL) {
+          throw new Error("Image URL not found on the page")
+        }
 
         // Download the image
         const imageBuffer = await page.goto(imageURL)
@@ -82,18 +103,28 @@ async function downloadImagesFromJson(jsonFilePath, outputFolder) {
         // Update last processed index
         lastProcessedIndex = i
 
-        // Save state periodically
+        // Save state and failed downloads periodically
         if (i % 10 === 0) {
           saveState()
+          saveFailedDownloads()
         }
       } catch (error) {
-        console.error(`Error downloading image (${photoUrl}):`, error)
+        console.error(`Error downloading image (${photoUrl}):`, error.message)
+        failedDownloads.push({
+          index: i,
+          ManufacturerProductNumber: manufacturerProductNumber,
+          PhotoUrl: photoUrl,
+          Error: error.message,
+        })
+        // Save failed downloads immediately upon encountering an error
+        saveFailedDownloads()
         continue // Skip to the next URL if an error occurs
       }
     }
 
-    // Save state at the end
+    // Save state and failed downloads at the end
     saveState()
+    saveFailedDownloads()
 
     // Close Puppeteer
     await browser.close()
@@ -103,7 +134,7 @@ async function downloadImagesFromJson(jsonFilePath, outputFolder) {
   }
 }
 
-const jsonFilePath = "./reference-files/microcontroller-image-0502_4.json"
+const jsonFilePath = "./reference-files/microcontroller-image-0502_9.json"
 const outputFolder = "./generated-folders/microcontrollers_images"
 
 downloadImagesFromJson(jsonFilePath, outputFolder)
